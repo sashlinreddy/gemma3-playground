@@ -1,0 +1,19 @@
+[project]
+name = "gemma3-tests"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "google-genai>=1.49.0",
+    "python-dotenv>=1.2.1",
+    "pdfplumber>=0.11.4",
+    "tiktoken>=0.8.0",
+    "chromadb>=0.5.5",
+    "sentence-transformers",
+    "torch",
+    "numpy<2",
+]
+
+[tool.uv]
+required-environments = ["sys_platform == 'darwin' and platform_machine == 'x86_64'"]
