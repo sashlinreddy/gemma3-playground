@@ -9,4 +9,4 @@
    GEMINI_API_KEY=your-key
    ```
 3. Drop the PDF corpus into `data/raw/`.
-4. Run the ingestion and vectorization steps (see respective docs).
+4. Run the ingestion and vectorization steps (see respective docs). All L&D scripts now live inside `ld/`, e.g. `uv run python ld/ingest.py`.

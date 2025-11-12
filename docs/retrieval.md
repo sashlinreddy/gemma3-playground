@@ -3,7 +3,7 @@
 ## Single question
 
 ```bash
-uv run python answer.py "What are Nestlé's key revenue drivers?" --company "Nestle" --top-k 4
+uv run python ld/answer.py "What are Nestlé's key revenue drivers?" --company "Nestle" --top-k 4
 ```
 
 Features:
@@ -14,7 +14,7 @@ Features:
 ## Interactive CLI
 
 ```bash
-uv run python chat_cli.py --show-context --show-query --history-log logs/session.jsonl
+uv run python ld/chat_cli.py --show-context --show-query --history-log logs/session.jsonl
 ```
 
 - Commands: `:company`, `:year`, `:topk`, `:rewrite`, `:show`, `:help`, `:quit`.

@@ -12,7 +12,7 @@ data/
 ## Running the ingestion script
 
 ```bash
-uv run python ingest.py --chunk-size 800 --overlap 100
+uv run python ld/ingest.py --chunk-size 800 --overlap 100
 ```
 
 - Converts PDFs to JSONL chunks with metadata.

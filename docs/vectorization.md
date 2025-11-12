@@ -3,7 +3,7 @@
 ## Command
 
 ```bash
-uv run python vectorize.py --reset
+uv run python ld/vectorize.py --reset
 ```
 
 - Reads all JSONL chunk files from `data/processed/chunks`.
