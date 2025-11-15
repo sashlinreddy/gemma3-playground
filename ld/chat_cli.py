@@ -25,6 +25,7 @@ from answer import (
     retrieve_chunks,
     stream_gemma,
 )
+from workflow import plan_workflow
 
 DEFAULT_TOP_K = 4
 COMMANDS_HELP = """Commands:
@@ -66,6 +67,11 @@ def parse_args() -> argparse.Namespace:
         "--history-log",
         type=Path,
         help="Optional path to append chat history as JSONL for debugging.",
+    )
+    parser.add_argument(
+        "--show-plan",
+        action="store_true",
+        help="Print workflow planner decisions before answering.",
     )
     return parser.parse_args()
 
@@ -174,6 +180,22 @@ def interactive_loop(
                     print("Unknown command. Type :help for options.")
             continue
 
+        workflow = plan_workflow(
+            client,
+            question=user_input,
+            model=state["model"],
+            history=state["history"],
+        )
+        if state["show_plan"]:
+            print()
+            print(workflow.pretty())
+        if workflow.needs_structured_tool:
+            print(
+                "\n⚠️ Planner flagged that this request needs the structured product "
+                "catalog tool, which is not yet available. Proceeding with best-effort "
+                "contextual answer."
+            )
+
         candidate_queries: list[str] = []
         if state["rewrite"]:
             rewrites = rewrite_queries(
@@ -226,7 +248,12 @@ def interactive_loop(
         print("\nAnswer:")
         answer_chunks: list[str] = []
         for text in stream_gemma(
-            client, user_input, context, state["model"], history=state["history"]
+            client,
+            user_input,
+            context,
+            state["model"],
+            history=state["history"],
+            workflow=workflow,
         ):
             print(text, end="", flush=True)
             answer_chunks.append(text)
@@ -269,6 +296,7 @@ def main() -> None:
         "show_query": args.show_query,
         "history": [],
         "history_log": args.history_log,
+        "show_plan": args.show_plan,
     }
 
     interactive_loop(client, embedder, state)

@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 from google import genai
 from sentence_transformers import SentenceTransformer
 
+from workflow import WorkflowDecision, plan_workflow
+
 DEFAULT_VECTOR_DIR = "data/processed/chroma"
 DEFAULT_COLLECTION = "financial_statements"
 DEFAULT_EMBED_MODEL = "all-mpnet-base-v2"
@@ -22,8 +24,11 @@ DEFAULT_MODEL = "gemma-3-27b-it"
 
 SYSTEM_PROMPT = """You are a banking learning-and-development assistant.
 Answer questions using ONLY the supplied context snippets from official financial statements.
-Always cite the chunk_id(s) you used in square brackets, e.g. [chunk-id].
-If the context is insufficient, say so explicitly and do not invent details."""
+Instructions:
+- Always cite the exact chunk_id(s) shown in the context headers, e.g. [2025-interim-results-analyst-presentation-nedbank-2025-0006]. Never use placeholders like [chunk-id(s): all] or [source].
+- Obey any requested length or format constraints (e.g., “40 words”) while still including citations.
+- When relevant context exists, synthesize the best possible answer instead of responding with generic limitations.
+- If the context truly lacks the required information, say so clearly and explain what is missing without inventing facts or citing nonexistent chunks."""
 
 REWRITE_PROMPT = """You rewrite banker questions into precise search queries for financial documents.
 Guidelines:
@@ -64,6 +69,29 @@ def format_history(history: Sequence[ConversationTurn], limit: int = 5) -> str:
     return "\n\n".join(segments)
 
 
+def _parse_candidate_list(raw: str) -> List[str] | None:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return [str(item).strip() for item in data]
+    except json.JSONDecodeError:
+        pass
+
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if 0 <= start < end:
+        snippet = raw[start : end + 1]
+        try:
+            data = json.loads(snippet)
+            if isinstance(data, list):
+                return [str(item).strip() for item in data]
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
 def rewrite_queries(
     client: genai.Client,
     question: str,
@@ -83,16 +111,15 @@ def rewrite_queries(
     if not raw:
         return []
 
-    candidates: List[str] = []
-    try:
-        data = json.loads(raw)
-        if isinstance(data, list):
-            candidates = [str(item).strip() for item in data]
-    except json.JSONDecodeError:
+    candidates = _parse_candidate_list(raw)
+    if candidates is None:
+        candidates = []
         for piece in raw.splitlines():
-            piece = piece.strip(" -*•")
-            if piece:
-                candidates.append(piece)
+            cleaned = piece.strip(" -*•`\"[],")
+            lowered = cleaned.lower()
+            if not cleaned or lowered in {"json", "`", "```"}:
+                continue
+            candidates.append(cleaned)
 
     cleaned = []
     for candidate in candidates:
@@ -157,14 +184,39 @@ def build_context(chunks: Sequence[RetrievedChunk]) -> str:
     return "\n\n".join(sections)
 
 
+def _format_workflow_block(workflow: WorkflowDecision | None) -> str:
+    if not workflow:
+        return ""
+
+    plan_lines = "\n".join(f"- {step}" for step in workflow.plan)
+    limitation = ""
+    if workflow.needs_structured_tool:
+        limitation = (
+            "\nNOTE: The workflow planner indicates that answering requires the "
+            "structured product lookup tool, which is not available. Explain this "
+            "limitation clearly before providing any interim guidance."
+        )
+
+    return (
+        "Workflow guidance:\n"
+        f"Intent: {workflow.intent}\n"
+        f"Reasoning: {workflow.reasoning}\n"
+        f"Needs structured tool: {workflow.needs_structured_tool}\n"
+        f"Plan:\n{plan_lines or '- (none)'}{limitation}\n\n"
+    )
+
+
 def _build_prompt(
     question: str,
     context: str,
     history: Sequence[ConversationTurn] | None = None,
+    workflow: WorkflowDecision | None = None,
 ) -> str:
     history_block = format_history(history or [], limit=5)
+    workflow_block = _format_workflow_block(workflow)
     return (
         f"{SYSTEM_PROMPT}\n\n"
+        f"{workflow_block}"
         f"Conversation so far:\n{history_block}\n\n"
         f"Context:\n{context or 'N/A'}\n\n"
         f"Question: {question}\nAnswer:"
@@ -177,8 +229,9 @@ def stream_gemma(
     context: str,
     model: str,
     history: Sequence[ConversationTurn] | None = None,
+    workflow: WorkflowDecision | None = None,
 ) -> Iterator[str]:
-    prompt = _build_prompt(question, context, history=history)
+    prompt = _build_prompt(question, context, history=history, workflow=workflow)
     stream = client.models.generate_content_stream(model=model, contents=prompt)
     for chunk in stream:
         text = getattr(chunk, "text", None)
@@ -231,6 +284,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print the actual query text used for retrieval.",
     )
+    parser.add_argument(
+        "--show-plan",
+        action="store_true",
+        help="Print the workflow planner decision before answering.",
+    )
     return parser.parse_args()
 
 
@@ -244,6 +302,21 @@ def main() -> None:
     client = genai.Client(api_key=api_key)
     collection = load_collection(args)
     embedder = SentenceTransformer(args.embedding_model)
+
+    workflow = plan_workflow(
+        client,
+        question=args.question,
+        history=None,
+        model=args.model,
+    )
+    if args.show_plan:
+        print(workflow.pretty())
+    if workflow.needs_structured_tool:
+        print(
+            "⚠️ Planner flagged this question as requiring the structured product "
+            "catalog tool, which is not available yet. Proceeding with best-effort "
+            "retrieval answer."
+        )
 
     candidate_queries: List[str] = []
     if not args.no_rewrite:
@@ -288,7 +361,13 @@ def main() -> None:
     print("=== Retrieved Context ===")
     print(context)
     print("\n=== Answer ===")
-    for text in stream_gemma(client, args.question, context, args.model):
+    for text in stream_gemma(
+        client,
+        args.question,
+        context,
+        args.model,
+        workflow=workflow,
+    ):
         print(text, end="", flush=True)
     print()
 
